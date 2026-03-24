@@ -1,7 +1,9 @@
+from __future__ import annotations
+
 import pandas as pd
 
-from data.splits import generate_walk_forward_folds
-from evaluation.metrics import multiclass_accuracy, multiclass_log_loss
+from match_model.data.splits import generate_walk_forward_folds
+from match_model.evaluation.metrics import multiclass_accuracy, multiclass_log_loss
 
 
 def evaluate_walk_forward(
@@ -11,7 +13,7 @@ def evaluate_walk_forward(
     test_size: int,
     step_size: int,
 ) -> pd.DataFrame:
-    rows = []
+    rows: list[dict] = []
 
     folds = generate_walk_forward_folds(
         df=df,

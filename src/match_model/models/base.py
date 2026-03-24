@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
 import pandas as pd
 
@@ -9,12 +11,6 @@ class BaseOutcomeModel(ABC):
 
     @abstractmethod
     def predict_proba(self, df: pd.DataFrame) -> pd.DataFrame:
-        """
-        Returns a dataframe with the same index as input and columns:
-        - home_win_prob
-        - draw_prob
-        - away_win_prob
-        """
         raise NotImplementedError
 
     def predict(self, df: pd.DataFrame) -> pd.Series:

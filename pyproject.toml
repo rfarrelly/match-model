@@ -1,7 +1,28 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
-name = "model"
+name = "match-model"
 version = "0.1.0"
-description = "Add your description here"
+description = "Standalone football match outcome modeling project"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "joblib>=1.5.3",
+    "pandas>=2.2.3",
+    "scikit-learn>=1.5.2",
+]
+
+[project.scripts]
+model-evaluate = "match_model.cli.evaluate:main"
+model-train = "match_model.cli.train:main"
+
+[tool.uv]
+package = true
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
