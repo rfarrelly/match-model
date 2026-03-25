@@ -18,6 +18,7 @@ dependencies = [
 model-evaluate = "match_model.cli.evaluate:main"
 model-train = "match_model.cli.train:main"
 model-export-artifact = "match_model.cli.export_artifact:main"
+model-evaluate-poisson = "match_model.cli.evaluate_poisson:main"
 
 [tool.uv]
 package = true
