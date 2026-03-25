@@ -12,6 +12,7 @@ def evaluate_walk_forward(
     train_size: int,
     test_size: int,
     step_size: int,
+    calibrator_factory=None,
 ) -> pd.DataFrame:
     rows: list[dict] = []
 
@@ -26,15 +27,28 @@ def evaluate_walk_forward(
         model = model_factory()
         model.fit(fold.train_df)
 
-        prob_df = model.predict_proba(fold.test_df)
-        pred = model.predict(fold.test_df)
+        train_prob_df = model.predict_proba(fold.train_df)
+        test_prob_df = model.predict_proba(fold.test_df)
+
+        if calibrator_factory is not None:
+            calibrator = calibrator_factory()
+            calibrator.fit(train_prob_df, fold.train_df["result"])
+            test_prob_df = calibrator.transform(test_prob_df)
+
+        pred = test_prob_df.idxmax(axis=1).map(
+            {
+                "home_win_prob": "H",
+                "draw_prob": "D",
+                "away_win_prob": "A",
+            }
+        )
 
         rows.append(
             {
                 "fold_index": fold.fold_index,
                 "train_rows": len(fold.train_df),
                 "test_rows": len(fold.test_df),
-                "log_loss": multiclass_log_loss(fold.test_df["result"], prob_df),
+                "log_loss": multiclass_log_loss(fold.test_df["result"], test_prob_df),
                 "accuracy": multiclass_accuracy(fold.test_df["result"], pred),
                 "test_start_date": fold.test_df["date"].min(),
                 "test_end_date": fold.test_df["date"].max(),

@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 
 from match_model.data.loaders import load_csv, normalize_columns
+from match_model.evaluation.calibration import MulticlassProbabilityCalibrator
 from match_model.evaluation.walk_forward import evaluate_walk_forward
 from match_model.models.poisson_model import PoissonGoalModel
 
@@ -13,7 +14,9 @@ def main() -> None:
     parser.add_argument("--train-size", type=int, default=2000)
     parser.add_argument("--test-size", type=int, default=300)
     parser.add_argument("--step-size", type=int, default=300)
-    parser.add_argument("--output", default="poisson_walk_forward_metrics.csv")
+    parser.add_argument(
+        "--output", default="poisson_calibrated_walk_forward_metrics.csv"
+    )
     parser.add_argument("--max-goals", type=int, default=10)
     parser.add_argument("--half-life-days", type=float, default=180.0)
     parser.add_argument("--shrinkage-k", type=float, default=12.0)
@@ -31,6 +34,7 @@ def main() -> None:
         train_size=args.train_size,
         test_size=args.test_size,
         step_size=args.step_size,
+        calibrator_factory=MulticlassProbabilityCalibrator,
     )
 
     metrics.to_csv(args.output, index=False)
