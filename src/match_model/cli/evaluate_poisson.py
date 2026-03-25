@@ -16,9 +16,11 @@ def main() -> None:
     parser.add_argument("--output", default="poisson_walk_forward_metrics.csv")
     parser.add_argument("--max-goals", type=int, default=10)
     parser.add_argument("--half-life-days", type=float, default=180.0)
-    parser.add_argument("--shrinkage-k", type=float, default=12.0)
+    parser.add_argument("--regularization-strength", type=float, default=1.0)
     parser.add_argument("--use-dixon-coles", action="store_true")
-    parser.add_argument("--rho", type=float, default=-0.05)
+    parser.add_argument("--rho", type=float, default=-0.02)
+    parser.add_argument("--optimizer-maxiter", type=int, default=1000)
+    parser.add_argument("--optimizer-maxfun", type=int, default=50000)
     args = parser.parse_args()
 
     df = normalize_columns(load_csv(args.input))
@@ -28,9 +30,11 @@ def main() -> None:
         model_factory=lambda: PoissonGoalModel(
             max_goals=args.max_goals,
             half_life_days=args.half_life_days,
-            shrinkage_k=args.shrinkage_k,
+            regularization_strength=args.regularization_strength,
             use_dixon_coles=args.use_dixon_coles,
             rho=args.rho,
+            optimizer_maxiter=args.optimizer_maxiter,
+            optimizer_maxfun=args.optimizer_maxfun,
         ),
         train_size=args.train_size,
         test_size=args.test_size,

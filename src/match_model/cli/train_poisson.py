@@ -15,7 +15,9 @@ def main() -> None:
     )
     parser.add_argument("--max-goals", type=int, default=10)
     parser.add_argument("--half-life-days", type=float, default=180.0)
-    parser.add_argument("--shrinkage-k", type=float, default=12.0)
+    parser.add_argument("--regularization-strength", type=float, default=1.0)
+    parser.add_argument("--use-dixon-coles", action="store_true")
+    parser.add_argument("--rho", type=float, default=-0.02)
     args = parser.parse_args()
 
     raw_df = load_csv(args.input)
@@ -24,12 +26,14 @@ def main() -> None:
     model = PoissonGoalModel(
         max_goals=args.max_goals,
         half_life_days=args.half_life_days,
-        shrinkage_k=args.shrinkage_k,
+        regularization_strength=args.regularization_strength,
+        use_dixon_coles=args.use_dixon_coles,
+        rho=args.rho,
     )
     model.fit(df)
 
     bundle = {
-        "model_type": "poisson_goal_model_v1",
+        "model_type": "poisson_goal_model_mle_v1",
         "feature_columns": ["home_team", "away_team", "date"],
         "model": model,
     }

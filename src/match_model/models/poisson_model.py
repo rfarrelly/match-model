@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
+from scipy.optimize import minimize
 from scipy.stats import poisson
 
 from match_model.models.base import BaseOutcomeModel
@@ -11,49 +12,57 @@ from match_model.models.base import BaseOutcomeModel
 
 @dataclass
 class TeamStrength:
-    home_attack: float = 1.0
-    away_attack: float = 1.0
-    home_defence: float = 1.0
-    away_defence: float = 1.0
+    attack: float = 0.0
+    defence: float = 0.0
 
 
 class PoissonGoalModel(BaseOutcomeModel):
     """
-    Production-oriented Poisson goal model with:
+    Poisson football model with:
+    - maximum likelihood estimation (MLE)
     - time decay
-    - shrinkage toward league average
-    - optional Dixon-Coles low-score adjustment
+    - L2 regularization
+    - optional Dixon-Coles low-score adjustment at inference
 
-    Predicts:
+    Model:
+        log(lambda_home) = home_advantage + attack[home] - defence[away]
+        log(lambda_away) = attack[away] - defence[home]
+
+    Outputs:
         home_win_prob
         draw_prob
         away_win_prob
-
-    Also exposes expected goals through predict_expected_goals().
     """
 
     def __init__(
         self,
         max_goals: int = 10,
         half_life_days: float = 180.0,
-        shrinkage_k: float = 12.0,
+        regularization_strength: float = 1.0,
         min_lambda: float = 0.05,
         max_lambda: float = 4.5,
-        use_dixon_coles: bool = True,
-        rho: float = -0.05,
+        use_dixon_coles: bool = False,
+        rho: float = -0.02,
+        optimizer_maxiter: int = 1000,
+        optimizer_maxfun: int = 50000,
     ):
         self.max_goals = max_goals
         self.half_life_days = half_life_days
-        self.shrinkage_k = shrinkage_k
+        self.regularization_strength = regularization_strength
         self.min_lambda = min_lambda
         self.max_lambda = max_lambda
 
         self.use_dixon_coles = use_dixon_coles
         self.rho = rho
 
-        self.avg_home_goals: float = 1.0
-        self.avg_away_goals: float = 1.0
+        self.optimizer_maxiter = optimizer_maxiter
+        self.optimizer_maxfun = optimizer_maxfun
+
+        self.teams_: list[str] = []
+        self.team_to_idx_: dict[str, int] = {}
         self.team_strengths: dict[str, TeamStrength] = {}
+
+        self.home_advantage_: float = 0.0
         self.fitted_: bool = False
         self.training_cutoff_date_: pd.Timestamp | None = None
 
@@ -76,19 +85,58 @@ class PoissonGoalModel(BaseOutcomeModel):
         )
         data["_weight"] = weights
 
-        self.avg_home_goals = self._weighted_mean(data["home_goals"], data["_weight"])
-        self.avg_away_goals = self._weighted_mean(data["away_goals"], data["_weight"])
+        self.teams_ = sorted(
+            pd.unique(data[["home_team", "away_team"]].values.ravel()).tolist()
+        )
+        self.team_to_idx_ = {team: idx for idx, team in enumerate(self.teams_)}
+        n_teams = len(self.teams_)
 
-        teams = pd.unique(data[["home_team", "away_team"]].values.ravel())
-        self.team_strengths = {}
+        home_idx = data["home_team"].map(self.team_to_idx_).to_numpy(dtype=int)
+        away_idx = data["away_team"].map(self.team_to_idx_).to_numpy(dtype=int)
+        home_goals = data["home_goals"].to_numpy(dtype=float)
+        away_goals = data["away_goals"].to_numpy(dtype=float)
+        match_weights = data["_weight"].to_numpy(dtype=float)
 
-        for team in teams:
-            self.team_strengths[team] = TeamStrength(
-                home_attack=self._estimate_home_attack(data, team),
-                away_attack=self._estimate_away_attack(data, team),
-                home_defence=self._estimate_home_defence(data, team),
-                away_defence=self._estimate_away_defence(data, team),
+        # Parameter vector:
+        # [home_advantage, attack_0..attack_n-1, defence_0..defence_n-1]
+        x0 = np.zeros(1 + 2 * n_teams, dtype=float)
+
+        avg_home_goals = max(float(data["home_goals"].mean()), 1e-6)
+        avg_away_goals = max(float(data["away_goals"].mean()), 1e-6)
+
+        x0[0] = np.log(avg_home_goals / avg_away_goals)
+
+        result = minimize(
+            fun=self._objective,
+            x0=x0,
+            args=(home_idx, away_idx, home_goals, away_goals, match_weights, n_teams),
+            method="L-BFGS-B",
+            options={
+                "maxiter": self.optimizer_maxiter,
+                "maxfun": self.optimizer_maxfun,
+            },
+        )
+
+        if not result.success:
+            raise RuntimeError(f"Poisson MLE optimization failed: {result.message}")
+
+        params = result.x
+        self.home_advantage_ = float(params[0])
+
+        raw_attack = params[1 : 1 + n_teams]
+        raw_defence = params[1 + n_teams : 1 + 2 * n_teams]
+
+        # Center for identifiability / stability
+        attack = raw_attack - raw_attack.mean()
+        defence = raw_defence - raw_defence.mean()
+
+        self.team_strengths = {
+            team: TeamStrength(
+                attack=float(attack[idx]),
+                defence=float(defence[idx]),
             )
+            for team, idx in self.team_to_idx_.items()
+        }
 
         self.fitted_ = True
         return self
@@ -105,16 +153,10 @@ class PoissonGoalModel(BaseOutcomeModel):
             home_strength = self.team_strengths.get(home, TeamStrength())
             away_strength = self.team_strengths.get(away, TeamStrength())
 
-            lambda_home = (
-                self.avg_home_goals
-                * home_strength.home_attack
-                * away_strength.away_defence
+            lambda_home = np.exp(
+                self.home_advantage_ + home_strength.attack - away_strength.defence
             )
-            lambda_away = (
-                self.avg_away_goals
-                * away_strength.away_attack
-                * home_strength.home_defence
-            )
+            lambda_away = np.exp(away_strength.attack - home_strength.defence)
 
             lambda_home = float(np.clip(lambda_home, self.min_lambda, self.max_lambda))
             lambda_away = float(np.clip(lambda_away, self.min_lambda, self.max_lambda))
@@ -141,6 +183,42 @@ class PoissonGoalModel(BaseOutcomeModel):
 
         return pd.DataFrame(rows, index=df.index)
 
+    def _objective(
+        self,
+        params: np.ndarray,
+        home_idx: np.ndarray,
+        away_idx: np.ndarray,
+        home_goals: np.ndarray,
+        away_goals: np.ndarray,
+        weights: np.ndarray,
+        n_teams: int,
+    ) -> float:
+        home_advantage = params[0]
+        attack = params[1 : 1 + n_teams]
+        defence = params[1 + n_teams : 1 + 2 * n_teams]
+
+        # Center attack and defence inside objective for stability / identifiability
+        attack = attack - attack.mean()
+        defence = defence - defence.mean()
+
+        log_lambda_home = home_advantage + attack[home_idx] - defence[away_idx]
+        log_lambda_away = attack[away_idx] - defence[home_idx]
+
+        lambda_home = np.exp(log_lambda_home)
+        lambda_away = np.exp(log_lambda_away)
+
+        # Weighted negative log-likelihood (dropping constant factorial terms is fine,
+        # but scipy Poisson logpmf is clean and safe)
+        ll_home = poisson.logpmf(home_goals, lambda_home)
+        ll_away = poisson.logpmf(away_goals, lambda_away)
+
+        weighted_nll = -np.sum(weights * (ll_home + ll_away))
+
+        # L2 regularization on team parameters only
+        reg = self.regularization_strength * (np.sum(attack**2) + np.sum(defence**2))
+
+        return float(weighted_nll + reg)
+
     def _match_outcome_probs(
         self, lambda_home: float, lambda_away: float
     ) -> dict[str, float]:
@@ -156,7 +234,6 @@ class PoissonGoalModel(BaseOutcomeModel):
                 matrix, lambda_home, lambda_away
             )
 
-        # Normalize after adjustment
         total = matrix.sum()
         if total <= 0:
             return {
@@ -183,14 +260,9 @@ class PoissonGoalModel(BaseOutcomeModel):
         lambda_home: float,
         lambda_away: float,
     ) -> np.ndarray:
-        """
-        Apply Dixon-Coles low-score adjustment to:
-        0-0, 1-0, 0-1, 1-1
-        """
         adjusted = matrix.copy()
         rho = self.rho
 
-        # tau adjustments
         tau_00 = 1 - (lambda_home * lambda_away * rho)
         tau_01 = 1 + (lambda_home * rho)
         tau_10 = 1 + (lambda_away * rho)
@@ -204,7 +276,6 @@ class PoissonGoalModel(BaseOutcomeModel):
         if adjusted.shape[0] > 1 and adjusted.shape[1] > 1:
             adjusted[1, 1] *= tau_11
 
-        # Guard against pathological negative values if rho is too extreme
         adjusted = np.clip(adjusted, 0.0, None)
         return adjusted
 
@@ -215,66 +286,3 @@ class PoissonGoalModel(BaseOutcomeModel):
     ) -> np.ndarray:
         ages_days = (reference_date - pd.to_datetime(dates)).dt.days.clip(lower=0)
         return np.power(0.5, ages_days / self.half_life_days)
-
-    def _weighted_mean(
-        self, values: pd.Series, weights: pd.Series | np.ndarray
-    ) -> float:
-        values_arr = np.asarray(values, dtype=float)
-        weights_arr = np.asarray(weights, dtype=float)
-        denom = weights_arr.sum()
-        if denom <= 0:
-            return float(np.mean(values_arr))
-        return float(np.sum(values_arr * weights_arr) / denom)
-
-    def _shrink_ratio(
-        self,
-        weighted_mean: float,
-        baseline_mean: float,
-        effective_n: float,
-    ) -> float:
-        shrunk_mean = (
-            (effective_n * weighted_mean) + (self.shrinkage_k * baseline_mean)
-        ) / (effective_n + self.shrinkage_k)
-
-        if baseline_mean <= 0:
-            return 1.0
-        return float(shrunk_mean / baseline_mean)
-
-    def _effective_sample_size(self, weights: pd.Series) -> float:
-        return float(weights.sum())
-
-    def _estimate_home_attack(self, data: pd.DataFrame, team: str) -> float:
-        games = data[data["home_team"] == team]
-        if len(games) == 0:
-            return 1.0
-
-        weighted_mean = self._weighted_mean(games["home_goals"], games["_weight"])
-        eff_n = self._effective_sample_size(games["_weight"])
-        return self._shrink_ratio(weighted_mean, self.avg_home_goals, eff_n)
-
-    def _estimate_away_attack(self, data: pd.DataFrame, team: str) -> float:
-        games = data[data["away_team"] == team]
-        if len(games) == 0:
-            return 1.0
-
-        weighted_mean = self._weighted_mean(games["away_goals"], games["_weight"])
-        eff_n = self._effective_sample_size(games["_weight"])
-        return self._shrink_ratio(weighted_mean, self.avg_away_goals, eff_n)
-
-    def _estimate_home_defence(self, data: pd.DataFrame, team: str) -> float:
-        games = data[data["home_team"] == team]
-        if len(games) == 0:
-            return 1.0
-
-        weighted_mean = self._weighted_mean(games["away_goals"], games["_weight"])
-        eff_n = self._effective_sample_size(games["_weight"])
-        return self._shrink_ratio(weighted_mean, self.avg_away_goals, eff_n)
-
-    def _estimate_away_defence(self, data: pd.DataFrame, team: str) -> float:
-        games = data[data["away_team"] == team]
-        if len(games) == 0:
-            return 1.0
-
-        weighted_mean = self._weighted_mean(games["home_goals"], games["_weight"])
-        eff_n = self._effective_sample_size(games["_weight"])
-        return self._shrink_ratio(weighted_mean, self.avg_home_goals, eff_n)
