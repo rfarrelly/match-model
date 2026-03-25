@@ -19,7 +19,9 @@ DEFAULT_FEATURE_COLUMNS = [
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", required=True, help="Path to raw CSV")
-    parser.add_argument("--output", required=True, help="Path to save trained baseline")
+    parser.add_argument(
+        "--output", required=True, help="Path to save trained baseline bundle"
+    )
     args = parser.parse_args()
 
     raw_df = load_csv(args.input)
@@ -32,16 +34,15 @@ def main() -> None:
     model = MulticlassBaselineModel(feature_columns=feature_columns)
     model.fit(df)
 
-    joblib.dump(
-        {
-            "model_type": "multiclass_baseline_v1",
-            "feature_columns": feature_columns,
-            "model": model,
-        },
-        args.output,
-    )
+    bundle = {
+        "model_type": "multiclass_baseline_v1",
+        "feature_columns": feature_columns,
+        "model": model,
+    }
 
-    print(f"Saved model to {args.output}")
+    joblib.dump(bundle, args.output)
+
+    print(f"Saved trained model bundle to {args.output}")
     print("Feature columns used:", feature_columns)
 
 
