@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import math
 
 import numpy as np
 import pandas as pd
@@ -23,7 +22,7 @@ class PoissonGoalModel(BaseOutcomeModel):
     Production-oriented Poisson goal model with:
     - time decay
     - shrinkage toward league average
-    - sane defaults for unseen teams
+    - optional Dixon-Coles low-score adjustment
 
     Predicts:
         home_win_prob
@@ -40,12 +39,17 @@ class PoissonGoalModel(BaseOutcomeModel):
         shrinkage_k: float = 12.0,
         min_lambda: float = 0.05,
         max_lambda: float = 4.5,
+        use_dixon_coles: bool = True,
+        rho: float = -0.05,
     ):
         self.max_goals = max_goals
         self.half_life_days = half_life_days
         self.shrinkage_k = shrinkage_k
         self.min_lambda = min_lambda
         self.max_lambda = max_lambda
+
+        self.use_dixon_coles = use_dixon_coles
+        self.rho = rho
 
         self.avg_home_goals: float = 1.0
         self.avg_away_goals: float = 1.0
@@ -67,7 +71,6 @@ class PoissonGoalModel(BaseOutcomeModel):
 
         self.training_cutoff_date_ = data["date"].max()
 
-        # Time-decay weights: more recent matches matter more.
         weights = self._compute_time_decay_weights(
             data["date"], self.training_cutoff_date_
         )
@@ -148,12 +151,13 @@ class PoissonGoalModel(BaseOutcomeModel):
 
         matrix = np.outer(home_probs, away_probs)
 
-        # Rows = home goals, cols = away goals
-        home_win = np.tril(matrix, -1).sum()
-        draw = np.trace(matrix)
-        away_win = np.triu(matrix, 1).sum()
+        if self.use_dixon_coles:
+            matrix = self._apply_dixon_coles_adjustment(
+                matrix, lambda_home, lambda_away
+            )
 
-        total = home_win + draw + away_win
+        # Normalize after adjustment
+        total = matrix.sum()
         if total <= 0:
             return {
                 "home_win_prob": 1 / 3,
@@ -161,11 +165,48 @@ class PoissonGoalModel(BaseOutcomeModel):
                 "away_win_prob": 1 / 3,
             }
 
+        matrix = matrix / total
+
+        home_win = np.tril(matrix, -1).sum()
+        draw = np.trace(matrix)
+        away_win = np.triu(matrix, 1).sum()
+
         return {
-            "home_win_prob": float(home_win / total),
-            "draw_prob": float(draw / total),
-            "away_win_prob": float(away_win / total),
+            "home_win_prob": float(home_win),
+            "draw_prob": float(draw),
+            "away_win_prob": float(away_win),
         }
+
+    def _apply_dixon_coles_adjustment(
+        self,
+        matrix: np.ndarray,
+        lambda_home: float,
+        lambda_away: float,
+    ) -> np.ndarray:
+        """
+        Apply Dixon-Coles low-score adjustment to:
+        0-0, 1-0, 0-1, 1-1
+        """
+        adjusted = matrix.copy()
+        rho = self.rho
+
+        # tau adjustments
+        tau_00 = 1 - (lambda_home * lambda_away * rho)
+        tau_01 = 1 + (lambda_home * rho)
+        tau_10 = 1 + (lambda_away * rho)
+        tau_11 = 1 - rho
+
+        adjusted[0, 0] *= tau_00
+        if adjusted.shape[0] > 1:
+            adjusted[1, 0] *= tau_10
+        if adjusted.shape[1] > 1:
+            adjusted[0, 1] *= tau_01
+        if adjusted.shape[0] > 1 and adjusted.shape[1] > 1:
+            adjusted[1, 1] *= tau_11
+
+        # Guard against pathological negative values if rho is too extreme
+        adjusted = np.clip(adjusted, 0.0, None)
+        return adjusted
 
     def _compute_time_decay_weights(
         self,
@@ -173,7 +214,6 @@ class PoissonGoalModel(BaseOutcomeModel):
         reference_date: pd.Timestamp,
     ) -> np.ndarray:
         ages_days = (reference_date - pd.to_datetime(dates)).dt.days.clip(lower=0)
-        # Half-life decay: weight halves every `half_life_days`
         return np.power(0.5, ages_days / self.half_life_days)
 
     def _weighted_mean(
@@ -192,9 +232,6 @@ class PoissonGoalModel(BaseOutcomeModel):
         baseline_mean: float,
         effective_n: float,
     ) -> float:
-        """
-        Shrink team-specific mean toward league baseline mean.
-        """
         shrunk_mean = (
             (effective_n * weighted_mean) + (self.shrinkage_k * baseline_mean)
         ) / (effective_n + self.shrinkage_k)
@@ -204,7 +241,6 @@ class PoissonGoalModel(BaseOutcomeModel):
         return float(shrunk_mean / baseline_mean)
 
     def _effective_sample_size(self, weights: pd.Series) -> float:
-        # Simple, intuitive "effective count" as sum of weights.
         return float(weights.sum())
 
     def _estimate_home_attack(self, data: pd.DataFrame, team: str) -> float:

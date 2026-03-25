@@ -17,6 +17,8 @@ def main() -> None:
     parser.add_argument("--max-goals", type=int, default=10)
     parser.add_argument("--half-life-days", type=float, default=180.0)
     parser.add_argument("--shrinkage-k", type=float, default=12.0)
+    parser.add_argument("--use-dixon-coles", action="store_true")
+    parser.add_argument("--rho", type=float, default=-0.05)
     args = parser.parse_args()
 
     df = normalize_columns(load_csv(args.input))
@@ -27,6 +29,8 @@ def main() -> None:
             max_goals=args.max_goals,
             half_life_days=args.half_life_days,
             shrinkage_k=args.shrinkage_k,
+            use_dixon_coles=args.use_dixon_coles,
+            rho=args.rho,
         ),
         train_size=args.train_size,
         test_size=args.test_size,
