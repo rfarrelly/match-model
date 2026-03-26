@@ -21,6 +21,7 @@ model-export-artifact = "match_model.cli.export_artifact:main"
 model-evaluate-poisson = "match_model.cli.evaluate_poisson:main"
 model-train-poisson = "match_model.cli.train_poisson:main"
 model-evaluate-poisson-calibrated = "match_model.cli.evaluate_poisson_calibrated:main"
+model-evaluate-league-regime = "match_model.cli.evaluate_league_regime:main"
 
 [tool.uv]
 package = true

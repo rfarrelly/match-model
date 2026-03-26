@@ -8,6 +8,9 @@ from match_model.schema.validation import validate_core_schema
 
 DEFAULT_COLUMN_MAP = {
     "Date": "date",
+    "League": "league",
+    "Div": "league",
+    "Season": "season",
     "HomeTeam": "home_team",
     "AwayTeam": "away_team",
     "FTHG": "home_goals",
@@ -53,6 +56,9 @@ def normalize_columns(
 
     if "date" in renamed.columns:
         renamed["date"] = pd.to_datetime(renamed["date"], errors="raise")
+
+    if "season" in renamed.columns:
+        renamed["season"] = renamed["season"].astype(str).str.strip()
 
     renamed = renamed.sort_values("date").reset_index(drop=True)
     validate_core_schema(renamed)
