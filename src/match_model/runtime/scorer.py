@@ -4,21 +4,19 @@ import pandas as pd
 
 
 class OutcomeScorerArtifact:
-    def __init__(self, model, feature_columns: list[str], model_name: str = "unknown"):
+    def __init__(self, model, model_name: str = "unknown"):
         self.model = model
-        self.feature_columns = feature_columns
         self.model_name = model_name
 
     def score_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
         probs = self.model.predict_proba(df)
-
-        if not {"home_win_prob", "draw_prob", "away_win_prob"} <= set(probs.columns):
-            raise ValueError(
-                "Model predict_proba() must return columns: "
-                "home_win_prob, draw_prob, away_win_prob"
-            )
+        xg = self.model.predict_expected_goals(df)
 
         out = probs.copy()
+
+        out["expected_home_goals"] = xg["expected_home_goals"]
+        out["expected_away_goals"] = xg["expected_away_goals"]
+
         out["predicted_outcome"] = (
             out[["home_win_prob", "draw_prob", "away_win_prob"]]
             .idxmax(axis=1)
@@ -32,4 +30,5 @@ class OutcomeScorerArtifact:
         )
 
         out["model_name"] = self.model_name
+
         return out
