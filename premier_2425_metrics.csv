@@ -1,2 +1,2 @@
 league,target_season,previous_season,matches_predicted,log_loss,accuracy
-Premier-League,2425,2324,379,0.9953410047763614,0.5197889182058048
+Premier-League,2425,2324,379,0.9953292250850261,0.5197889182058048

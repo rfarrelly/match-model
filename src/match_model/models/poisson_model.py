@@ -150,8 +150,13 @@ class PoissonGoalModel(BaseOutcomeModel):
             home = row["home_team"]
             away = row["away_team"]
 
-            home_strength = self.team_strengths.get(home, TeamStrength())
-            away_strength = self.team_strengths.get(away, TeamStrength())
+            home_strength = self.team_strengths.get(home)
+            away_strength = self.team_strengths.get(away)
+
+            if home_strength is None:
+                home_strength = TeamStrength(attack=-0.05, defence=0.05)
+            if away_strength is None:
+                away_strength = TeamStrength(attack=-0.05, defence=0.05)
 
             lambda_home = np.exp(
                 self.home_advantage_ + home_strength.attack - away_strength.defence
